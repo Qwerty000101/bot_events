@@ -37,7 +37,57 @@ function initDb() {
       FOREIGN KEY (organizer_user_id) REFERENCES users(user_id)
     )
   `);
+    db.exec(`
+  CREATE TABLE IF NOT EXISTS categories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL
+  )
+`);
+// Таблица институтов
+db.exec(`
+  CREATE TABLE IF NOT EXISTS institutes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL
+  )
+`);
 
+// Предзаполняем, если пусто
+const instCount = db.prepare('SELECT COUNT(*) as cnt FROM institutes').get().cnt;
+if (instCount === 0) {
+  const insert = db.prepare('INSERT INTO institutes (key, name) VALUES (?, ?)');
+  const institutesList = [
+    ['humanitarian', 'Гуманитарный институт'],
+    ['oil_gas', 'Институт нефти и газа'],
+    ['it_telecom', 'Институт информационных технологий и телекоммуникаций'],
+    ['engineering', 'Инженерный институт'],
+    ['math_natural', 'Институт математики и естественных наук'],
+    ['living_systems', 'Институт живых систем'],
+    ['economics_management', 'Институт экономики и управления'],
+    ['education_social', 'Институт образования и социальных наук'],
+    ['law', 'Юридический институт'],
+    ['medical_bio', 'Медико-биологический факультет'],
+    ['international', 'Факультет международных отношений'],
+    ['food_bio', 'Факультет пищевой инженерии и биотехнологий'],
+    ['pyatigorsk', 'Пятигорский институт (филиал) СКФУ'],
+    ['nevinnomyssk', 'Невинномысский технологический институт (филиал) СКФУ']
+  ];
+  for (const [key, name] of institutesList) {
+    insert.run(key, name);
+  }
+}
+// Предзаполняем категории, если таблица пуста
+const count = db.prepare('SELECT COUNT(*) as cnt FROM categories').get().cnt;
+if (count === 0) {
+  const insert = db.prepare('INSERT INTO categories (key, name) VALUES (?, ?)');
+  insert.run('science', 'Наука');
+  insert.run('sport', 'Спорт');
+  insert.run('culture', 'Культура');
+  insert.run('olymp', 'Олимпиада');
+  insert.run('other', 'Другое');
+  console.log('✅ Категории добавлены');
+}
   // Билеты (регистрации)
   db.exec(`
     CREATE TABLE IF NOT EXISTS tickets (
@@ -83,7 +133,12 @@ function initDb() {
 
 // ========== Методы для работы с пользователями ==========
 function getUser(userId) {
-  const stmt = db.prepare('SELECT * FROM users WHERE user_id = ?');
+  const stmt = db.prepare(`
+    SELECT u.*, i.name as institute_name
+    FROM users u
+    LEFT JOIN institutes i ON u.institute = i.key
+    WHERE u.user_id = ?
+  `);
   return stmt.get(userId);
 }
 
@@ -91,39 +146,62 @@ function createOrUpdateUser(userId, data) {
   const existing = getUser(userId);
   if (!existing) {
     const stmt = db.prepare(`
-      INSERT INTO users (user_id, full_name, institute, group_name)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO users (user_id, full_name, institute, group_name, role)
+      VALUES (?, ?, ?, ?, ?)
     `);
-    stmt.run(userId, data.full_name || null, data.institute || null, data.group_name || null);
+    stmt.run(
+      userId,
+      data.full_name || null,
+      data.institute || null,
+      data.group_name || null,
+      data.role || 'student'
+    );
   } else {
     const stmt = db.prepare(`
-      UPDATE users SET full_name = ?, institute = ?, group_name = ? WHERE user_id = ?
+      UPDATE users SET full_name = ?, institute = ?, group_name = ?, role = ? WHERE user_id = ?
     `);
-    stmt.run(data.full_name || existing.full_name, data.institute || existing.institute,
-             data.group_name || existing.group_name, userId);
+    stmt.run(
+      data.full_name || existing.full_name,
+      data.institute || existing.institute,
+      data.group_name || existing.group_name,
+      data.role || existing.role,
+      userId
+    );
   }
   return getUser(userId);
 }
 
 // ========== Методы для мероприятий ==========
 function getEvents(filters = {}) {
-  let query = 'SELECT * FROM events WHERE status = ?';
+  let query = `
+    SELECT e.*, c.name as category_name, i.name as institute_name
+    FROM events e
+    LEFT JOIN categories c ON e.category = c.key
+    LEFT JOIN institutes i ON e.institute_filter = i.key
+    WHERE e.status = ?
+  `;
   const params = ['active'];
   if (filters.category) {
-    query += ' AND category = ?';
+    query += ' AND e.category = ?';
     params.push(filters.category);
   }
   if (filters.institute) {
-    query += ' AND (institute_filter IS NULL OR institute_filter = ?)';
+    query += ' AND (e.institute_filter = ? OR e.institute_filter IS NULL)';
     params.push(filters.institute);
   }
-  query += ' ORDER BY event_date ASC, event_time ASC';
+  query += ' ORDER BY e.event_date ASC, e.event_time ASC';
   const stmt = db.prepare(query);
   return stmt.all(...params);
 }
 
 function getEventById(eventId) {
-  const stmt = db.prepare('SELECT * FROM events WHERE id = ?');
+  const stmt = db.prepare(`
+    SELECT e.*, c.name as category_name, i.name as institute_name
+    FROM events e
+    LEFT JOIN categories c ON e.category = c.key
+    LEFT JOIN institutes i ON e.institute_filter = i.key
+    WHERE e.id = ?
+  `);
   return stmt.get(eventId);
 }
 
@@ -169,12 +247,29 @@ function registerForEvent(userId, eventId) {
   return { uuid, event };
 }
 
+// function getTicketByUUID(uuid) {
+//   const stmt = db.prepare(`
+//     SELECT t.*, u.full_name, u.institute, u.group_name, e.title as event_title, e.event_date, e.event_time
+//     FROM tickets t
+//     JOIN users u ON t.user_id = u.user_id
+//     JOIN events e ON t.event_id = e.id
+//     WHERE t.uuid = ?
+//   `);
+//   return stmt.get(uuid);
+// }
 function getTicketByUUID(uuid) {
   const stmt = db.prepare(`
-    SELECT t.*, u.full_name, u.institute, u.group_name, e.title as event_title, e.event_date, e.event_time
+    SELECT t.*,
+           u.full_name,
+           u.group_name,
+           i.name as institute_name,
+           e.title as event_title,
+           e.event_date,
+           e.event_time
     FROM tickets t
     JOIN users u ON t.user_id = u.user_id
     JOIN events e ON t.event_id = e.id
+    LEFT JOIN institutes i ON u.institute = i.key
     WHERE t.uuid = ?
   `);
   return stmt.get(uuid);
@@ -329,7 +424,52 @@ function getEventParticipants(eventId, userId) {
   return stmt.all(eventId);
 }
 
+// Получить все категории
+function getCategories() {
+  return db.prepare('SELECT key, name FROM categories ORDER BY name').all();
+}
 
+// Получить название категории по ключу
+function getCategoryName(key) {
+  const row = db.prepare('SELECT name FROM categories WHERE key = ?').get(key);
+  return row ? row.name : key;
+}
+
+function getInstitutes() {
+  return db.prepare('SELECT key, name FROM institutes ORDER BY name').all();
+}
+
+function getInstituteName(key) {
+  const row = db.prepare('SELECT name FROM institutes WHERE key = ?').get(key);
+  return row ? row.name : key || '—';
+}
+function updateEvent(eventId, data) {
+  const fields = [];
+  const values = [];
+  if (data.title !== undefined) { fields.push('title = ?'); values.push(data.title); }
+  if (data.description !== undefined) { fields.push('description = ?'); values.push(data.description); }
+  if (data.category !== undefined) { fields.push('category = ?'); values.push(data.category); }
+  if (data.institute_filter !== undefined) { fields.push('institute_filter = ?'); values.push(data.institute_filter); }
+  if (data.location !== undefined) { fields.push('location = ?'); values.push(data.location); }
+  if (data.event_date !== undefined) { fields.push('event_date = ?'); values.push(data.event_date); }
+  if (data.event_time !== undefined) { fields.push('event_time = ?'); values.push(data.event_time); }
+  if (data.capacity !== undefined) {
+    const current = getEventById(eventId);
+    if (current) {
+      const diff = data.capacity - current.capacity;
+      if (diff < 0 && current.available_seats + diff < 0) throw new Error('Нельзя уменьшить места ниже числа зарегистрированных');
+      fields.push('available_seats = available_seats + ?, capacity = ?');
+      values.push(diff, data.capacity);
+    } else {
+      fields.push('capacity = ?');
+      values.push(data.capacity);
+    }
+  }
+  if (fields.length === 0) return;
+  const query = `UPDATE events SET ${fields.join(', ')} WHERE id = ?`;
+  values.push(eventId);
+  db.prepare(query).run(...values);
+}
 module.exports = {
   initDb,
   getUser,
@@ -346,5 +486,10 @@ module.exports = {
   updateUserProfile,
   deleteEvent,
   getEventStats,
-  getEventParticipants
+  getEventParticipants,
+  getCategories, 
+  getCategoryName,
+  getInstitutes,
+  getInstituteName,
+  updateEvent
 };

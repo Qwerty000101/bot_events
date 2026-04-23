@@ -43,7 +43,8 @@ function formatEventDetails(event) {
 📅 **Дата:** ${event.event_date}
 ⏰ **Время:** ${event.event_time}
 📍 **Место:** ${event.location}
-🏷️ **Категория:** ${event.category}
+🏷️ **Категория:** ${event.category_name || event.category}
+🏛️ **Институт:** ${event.institute_name || 'Все институты'}
 👥 **Свободных мест:** ${event.available_seats} / ${event.capacity}
 
 ${event.description || ''}

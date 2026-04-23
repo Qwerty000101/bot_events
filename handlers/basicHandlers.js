@@ -3,6 +3,39 @@ const db = require('../db');
 const { getMainMenuKeyboard, isFreshMessage } = require('../utils');
 const stateManager = require('../stateManager');
 
+const INSTITUTES_PER_PAGE = 8; // удобно для списка из 14 институтов
+
+// ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ИНСТИТУТОВ ==========
+
+// Показывает страницу выбора института с пагинацией
+async function showInstitutePage(ctx, userId, page, stateStep) {
+  const institutes = db.getInstitutes();
+  const totalPages = Math.ceil(institutes.length / INSTITUTES_PER_PAGE);
+  if (page < 1) page = 1;
+  if (page > totalPages) page = totalPages;
+  const start = (page - 1) * INSTITUTES_PER_PAGE;
+  const pageItems = institutes.slice(start, start + INSTITUTES_PER_PAGE);
+
+  const buttons = pageItems.map(inst => [
+    Keyboard.button.callback(inst.name, `institute_select:${stateStep}:${inst.key}`)
+  ]);
+
+  const navRow = [];
+  if (page > 1) navRow.push(Keyboard.button.callback('⬅️ Назад', `institute_page:${stateStep}:${page - 1}`));
+  if (page < totalPages) navRow.push(Keyboard.button.callback('Вперёд ➡️', `institute_page:${stateStep}:${page + 1}`));
+  if (navRow.length) buttons.push(navRow);
+
+  // Кнопка "Не указывать институт" (только для мероприятий, в профиле всегда нужен институт)
+  if (stateStep !== 'event_institute') {
+    // Для профиля: кнопка не нужна, но можно оставить пустую строку
+  }
+
+  const keyboard = Keyboard.inlineKeyboard(buttons);
+  return ctx.reply('Выберите ваш институт:', { attachments: [keyboard] });
+}
+
+// ========== ОСНОВНЫЕ ОБРАБОТЧИКИ ==========
+
 // /start
 async function handleStartCommand(ctx) {
   if (!isFreshMessage(ctx, global.botStartTime)) return;
@@ -21,7 +54,7 @@ async function handleStartCommand(ctx) {
       [Keyboard.button.callback('👑 Администратор', 'reg_role:admin')]
     ]);
     return ctx.reply(
-      '👋 Добро пожаловать в систему мероприятий СКФУ!\n\nДля начала выберите ваш **статус**:',
+      '👋 Добро пожаловать в систему мероприятий СКФУ!\n\nДля начала выберите ваш статус:',
       { attachments: [roleKeyboard] }
     );
   }
@@ -49,7 +82,7 @@ async function handleRegRoleSelect(ctx) {
 
   const role = ctx.match[1];
   console.log('🎭 Выбрана роль:', role);
-  await ctx.answerOnCallback({ notification: role === 'student' ? 'Студент' : 'Преподаватель' });
+  await ctx.answerOnCallback({ notification: role === 'student' ? 'Студент' : 'Администратор' });
 
   state.role = role;
   state.step = 'waiting_full_name';
@@ -64,59 +97,38 @@ async function handleProfileInput(ctx) {
   if (!userId || !stateManager.hasUserState(userId)) return false;
 
   const state = stateManager.getUserState(userId);
-  const text = ctx.message?.body?.text?.trim();
-  if (!text) return false;
 
-  switch (state.step) {
-    case 'waiting_full_name':
-      state.full_name = text;
-      state.step = 'waiting_institute';
-      stateManager.setUserState(userId, state);
-      return ctx.reply('📚 Укажите ваш **институт** (например, ИИТ, ИЭИ, ЮИ и т.д.):', { format: 'markdown' });
-
-    case 'waiting_institute':
-      state.institute = text;
-      if (state.role === 'admin') {
-        // Преподаватель: сохраняем без группы
-        db.createOrUpdateUser(userId, {
-          full_name: state.full_name,
-          institute: state.institute,
-          group_name: null,
-          role: 'admin'
-        });
-        stateManager.deleteUserState(userId);
-        // После сохранения получаем пользователя для определения роли в меню
-        const teacherUser = db.getUser(userId);
-        return ctx.reply('✅ Регистрация завершена! Теперь вы можете создавать мероприятия.', {
-          format: 'markdown',
-          attachments: [getMainMenuKeyboard(teacherUser.role)]
-        });
-      } else {
-        // Студент: запрашиваем группу
-        state.step = 'waiting_group';
-        stateManager.setUserState(userId, state);
-        return ctx.reply('👥 Укажите вашу **группу** (например, ИВТ-21-1):', { format: 'markdown' });
-      }
-
-    case 'waiting_group':
-      const group = text;
-      db.createOrUpdateUser(userId, {
-        full_name: state.full_name,
-        institute: state.institute,
-        group_name: group,
-        role: 'student'
-      });
-      stateManager.deleteUserState(userId);
-      const studentUser = db.getUser(userId);
-      await ctx.reply('✅ Регистрация завершена! Теперь вы можете записываться на мероприятия.', {
-        format: 'markdown',
-        attachments: [getMainMenuKeyboard(studentUser.role)]
-      });
-      return true;
-
-    default:
-      return false;
+  // Если текущий шаг — ожидание ввода ФИО
+  if (state.step === 'waiting_full_name') {
+    const text = ctx.message?.body?.text?.trim();
+    if (!text) return false;
+    state.full_name = text;
+    state.step = 'waiting_institute_select';
+    stateManager.setUserState(userId, state);
+    return showInstitutePage(ctx, userId, 1, 'waiting_institute_select');
   }
+
+  // Если ждём группу
+  if (state.step === 'waiting_group') {
+    const text = ctx.message?.body?.text?.trim();
+    if (!text) return false;
+    const group = text;
+    db.createOrUpdateUser(userId, {
+      full_name: state.full_name,
+      institute: state.institute,
+      group_name: group,
+      role: 'student'
+    });
+    stateManager.deleteUserState(userId);
+    const studentUser = db.getUser(userId);
+    await ctx.reply('✅ Регистрация завершена! Теперь вы можете записываться на мероприятия.', {
+      format: 'markdown',
+      attachments: [getMainMenuKeyboard(studentUser.role)]
+    });
+    return true;
+  }
+
+  return false;
 }
 
 // Обработка неизвестных команд
@@ -183,14 +195,21 @@ async function handleProfileCommand(ctx) {
     return ctx.reply('Вы ещё не зарегистрированы. Используйте /start.');
   }
 
+  // Используем человекочитаемое название института
+  const instituteName = db.getInstituteName(user.institute);
   const roleText = user.role === 'admin' ? 'Администратор' : 'Студент';
-  const text = `👤 **Ваш профиль**
+
+  let text = `👤 **Ваш профиль**
 
 **ФИО:** ${user.full_name || 'не указано'}
-**Институт:** ${user.institute || 'не указан'}
-**Группа:** ${user.group_name || 'не указана'}
-**Статус:** ${roleText}
-  `;
+**Институт:** ${instituteName || 'не указан'}`;
+
+  // Показываем группу только для студента, если она задана
+  if (user.role !== 'admin' && user.group_name) {
+    text += `\n**Группа:** ${user.group_name}`;
+  }
+
+  text += `\n**Статус:** ${roleText}`;
 
   const keyboard = Keyboard.inlineKeyboard([
     [Keyboard.button.callback('✏️ Редактировать профиль', 'profile:edit')],
@@ -225,7 +244,7 @@ async function handleProfileEdit(ctx) {
     [Keyboard.button.callback('Администратор', 'profile_edit_role:admin')],
     [Keyboard.button.callback('❌ Отменить', 'profile:cancel')]
   ]);
-  return ctx.reply('Выберите **статус**:', { attachments: [roleKeyboard] });
+  return ctx.reply('Выберите статус:', { attachments: [roleKeyboard] });
 }
 
 // Callback для выбора роли на первом шаге редактирования
@@ -241,7 +260,7 @@ async function handleProfileEditRoleSelect(ctx) {
   state.step = 'profile_edit_full_name';
   stateManager.setUserState(userId, state);
 
-  await ctx.answerOnCallback({ notification: role === 'student' ? 'Студент' : 'Преподаватель' });
+  await ctx.answerOnCallback({ notification: role === 'student' ? 'Студент' : 'Администратор' });
   return ctx.reply(
     `Введите новое **ФИО** (текущее: ${state.tempProfile.full_name || 'не указано'}):\n\n_Введите /quit для отмены._`,
     { format: 'markdown' }
@@ -257,41 +276,21 @@ async function handleProfileEditInput(ctx) {
   if (!state.step.startsWith('profile_edit_')) return false;
 
   const text = ctx.message?.body?.text?.trim();
-  if (!text) return false;
-
-  if (text.toLowerCase() === '/quit') {
+  if (text && text.toLowerCase() === '/quit') {
     stateManager.deleteUserState(userId);
-    return ctx.reply('❌ Редактирование отменено.', { attachments: [getMainMenuKeyboard()] }); // без роли, но OK
+    return ctx.reply('❌ Редактирование отменено.', { attachments: [getMainMenuKeyboard()] });
   }
 
   switch (state.step) {
     case 'profile_edit_full_name':
+      if (!text) return false;
       state.tempProfile.full_name = text;
-      state.step = 'profile_edit_institute';
+      state.step = 'profile_edit_institute_select';
       stateManager.setUserState(userId, state);
-      return ctx.reply('Введите **институт** (например, ИИТ):', { format: 'markdown' });
-
-    case 'profile_edit_institute':
-      state.tempProfile.institute = text;
-      if (state.tempProfile.role === 'admin') {
-        // Преподаватель: сохраняем без группы
-        db.updateUserProfile(userId, {
-          full_name: state.tempProfile.full_name,
-          institute: state.tempProfile.institute,
-          group_name: null,
-          role: state.tempProfile.role
-        });
-        stateManager.deleteUserState(userId);
-        await ctx.reply('✅ Профиль обновлён!');
-        return handleProfileCommand(ctx);
-      } else {
-        // Студент: запрашиваем группу
-        state.step = 'profile_edit_group';
-        stateManager.setUserState(userId, state);
-        return ctx.reply('Введите **группу** (например, ИВТ-21-1):', { format: 'markdown' });
-      }
+      return showInstitutePage(ctx, userId, 1, 'profile_edit_institute_select');
 
     case 'profile_edit_group':
+      if (!text) return false;
       state.tempProfile.group_name = text;
       // Сохраняем студента
       db.updateUserProfile(userId, {
@@ -327,5 +326,6 @@ module.exports = {
   handleProfileEdit,
   handleProfileEditInput,
   handleProfileEditRoleSelect,
-  handleProfileCancel
+  handleProfileCancel,
+  showInstitutePage
 };

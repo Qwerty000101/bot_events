@@ -26,16 +26,124 @@ router.post('/tickets/cancel', validateInitData, (req, res) => {
     res.status(400).json({ error: err.message });
   }
 });
+// Создание мероприятия (только для администраторов)
+router.post('/events/create', validateInitData, (req, res) => {
+  const { title, description, category, institute_filter, event_date, event_time, location, capacity } = req.body;
+  
+  const user = db.getUser(req.userId);
+  if (!user || user.role !== 'admin') {
+    return res.status(403).json({ error: 'Только администраторы могут создавать мероприятия' });
+  }
+
+  if (!title || !event_date || !event_time || !capacity) {
+    return res.status(400).json({ error: 'Название, дата, время и количество мест обязательны' });
+  }
+
+  try {
+    const eventId = db.createEvent({
+      title,
+      description: description || '',
+      category: category || 'other',
+      institute_filter: institute_filter || null,   // <-- используем institute_filter
+      location: location || '',
+      event_date,
+      event_time,
+      capacity: parseInt(capacity, 10),
+      organizer_user_id: req.userId
+    });
+    res.json({ success: true, eventId });
+  } catch (err) {
+    console.error('Ошибка создания мероприятия:', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
 // Получить список мероприятий с фильтрацией
 router.post('/events/list', validateInitData, (req, res) => {
   const { category, institute } = req.body;
   const events = db.getEvents({ category, institute });
   res.json({ events });
 });
+router.post('/categories', validateInitData, (req, res) => {
+  const categories = db.getCategories();
+  res.json({ categories });
+});
+//Получение института
+router.post('/institutes', validateInitData, (req, res) => {
+  const institutes = db.getInstitutes();
+  res.json({ institutes });
+});
 // Получить профиль текущего пользователя (роль и данные)
 router.post('/users/me', validateInitData, (req, res) => {
   const user = db.getUser(req.userId);
   res.json({ user });
+});
+// Удаление мероприятия (только для администраторов)
+router.post('/events/delete', validateInitData, (req, res) => {
+  console.log('--- DELETE EVENT REQUEST ---');
+  console.log('req.body:', req.body);
+  const numericId = parseInt(req.body.id, 10);
+  console.log('numericId:', numericId, 'userId:', req.userId);
+  
+  if (isNaN(numericId)) {
+    console.log('ERROR: numericId is NaN');
+    return res.status(400).json({ error: 'Неверный ID мероприятия' });
+  }
+  
+  const user = db.getUser(req.userId);
+  console.log('user role:', user?.role);
+  if (!user || user.role !== 'admin') {
+    console.log('ERROR: user is not admin');
+    return res.status(403).json({ error: 'Только администраторы могут удалять мероприятия' });
+  }
+  
+  try {
+    console.log('Calling db.deleteEvent with', numericId, req.userId);
+    db.deleteEvent(numericId, req.userId);
+    console.log('Delete successful');
+    res.json({ success: true });
+  } catch (err) {
+    console.log('ERROR in deleteEvent:', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Обновление мероприятия (только для администраторов)
+router.post('/events/update', validateInitData, (req, res) => {
+  console.log('--- UPDATE EVENT REQUEST ---');
+  console.log('req.body:', req.body);
+  const numericId = parseInt(req.body.id, 10);
+  console.log('numericId:', numericId, 'userId:', req.userId);
+  
+  if (isNaN(numericId)) {
+    console.log('ERROR: numericId is NaN');
+    return res.status(400).json({ error: 'Неверный ID мероприятия' });
+  }
+  
+  const user = db.getUser(req.userId);
+  console.log('user role:', user?.role);
+  if (!user || user.role !== 'admin') {
+    console.log('ERROR: user is not admin');
+    return res.status(403).json({ error: 'Только администраторы могут редактировать мероприятия' });
+  }
+  
+  try {
+    console.log('Calling db.updateEvent with', numericId);
+    db.updateEvent(numericId, {
+      title: req.body.title,
+      description: req.body.description || '',
+      category: req.body.category || 'other',
+      institute_filter: req.body.institute_filter || null,
+      location: req.body.location || '',
+      event_date: req.body.event_date,
+      event_time: req.body.event_time,
+      capacity: parseInt(req.body.capacity, 10)
+    });
+    console.log('Update successful');
+    res.json({ success: true });
+  } catch (err) {
+    console.log('ERROR in updateEvent:', err.message);
+    res.status(400).json({ error: err.message });
+  }
 });
 // Получить детали конкретного мероприятия
 router.post('/events/:id', validateInitData, (req, res) => {
@@ -93,7 +201,7 @@ router.post('/scan/validate', validateInitData, (req, res) => {
       valid: true,
       student: {
         full_name: ticket.full_name,
-        institute: ticket.institute,
+        institute: ticket.institute_name,
         group: ticket.group_name
       },
       event: ticket.event_title,
@@ -103,5 +211,16 @@ router.post('/scan/validate', validateInitData, (req, res) => {
     res.json({ valid: false, message: err.message });
   }
 });
+// Обновление профиля пользователя
+router.post('/users/update', validateInitData, (req, res) => {
+  const { full_name, institute, group_name, role } = req.body;
+  try {
+    db.updateUserProfile(req.userId, { full_name, institute, group_name, role });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 
 module.exports = router;

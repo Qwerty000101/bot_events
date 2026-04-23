@@ -10,6 +10,8 @@ const { safeCallbackHandler, getMainMenuKeyboard, isFreshMessage, formatEventDet
 const basicHandlers = require('./handlers/basicHandlers');
 const apiRoutes = require('./api/routes');
 
+const INSTITUTES_PER_PAGE = 8;
+
 // Инициализация БД
 db.initDb();
 
@@ -35,7 +37,12 @@ bot.use(async (ctx, next) => {
   }
   await next();
 });
-
+bot.api.setMyCommands([
+  {
+    name: 'start',
+    description: 'Запустить бота',
+  },
+]);
 // Команды
 bot.command('start', basicHandlers.handleStartCommand);
 bot.command('help', (ctx) => basicHandlers.handleHelp(ctx));
@@ -145,7 +152,7 @@ bot.action(/^event:delete:(\d+)$/, safeCallbackHandler(async (ctx) => {
 
   await ctx.answerOnCallback({ notification: 'Подтвердите удаление' });
   return ctx.reply(
-    `Вы уверены, что хотите удалить мероприятие **${event.title}**?\nЭто действие необратимо.`,
+    `Вы уверены, что хотите удалить мероприятие ${event.title}?\nЭто действие необратимо.`,
     { format: 'markdown', attachments: [confirmKeyboard] }
   );
 }));
@@ -178,7 +185,7 @@ bot.action(/^event:stats:(\d+)$/, safeCallbackHandler(async (ctx) => {
   
   try {
     const stats = db.getEventStats(eventId, userId);
-    const message = `📊 **Статистика мероприятия**\n\n` +
+    const message = `📊 Статистика мероприятия\n\n` +
       `👥 Зарегистрировалось: ${stats.registered}\n` +
       `✅ Пришло: ${stats.checked_in}\n` +
       `🎟️ Всего мест: ${stats.total_seats} (свободно: ${stats.available_seats})`;
@@ -210,11 +217,11 @@ bot.action(/^event:participants:(\d+)$/, safeCallbackHandler(async (ctx) => {
     
     const list = participants.map(p => {
       const statusEmoji = p.status === 'registered' ? '🟢' : '✅';
-      const statusText = p.status === 'registered' ? 'Зарегистрирован' : 'Пришёл';
+      const statusText = p.status === 'registered' ? 'Зарегистрировался' : 'Зарегистрировался и пришёл';
       return `${statusEmoji} ${p.full_name} (${p.institute || '-'}, ${p.group_name || '-'}) — ${statusText}`;
     }).join('\n');
     
-    const message = `📋 **Участники мероприятия**\n\n${list}`;
+    const message = `📋 Участники мероприятия\n\n${list}`;
     const keyboard = Keyboard.inlineKeyboard([
       [Keyboard.button.callback('🔙 К статистике', `event:stats:${eventId}`)],
       [Keyboard.button.callback('🏠 Главное меню', 'menu:main')]
@@ -242,7 +249,7 @@ bot.action(/^event:export_xlsx:(\d+)$/, safeCallbackHandler(async (ctx) => {
       'ФИО': p.full_name,
       'Институт': p.institute || '-',
       'Группа': p.group_name || '-',
-      'Статус': p.status === 'registered' ? 'Зарегистрирован' : 'Пришёл',
+      'Статус': p.status === 'registered' ? 'Зарегистрировался' : 'Зарегистрировался и пришёл',
       'Время отметки': p.checked_in_at || '-'
     }));
     
@@ -255,7 +262,7 @@ bot.action(/^event:export_xlsx:(\d+)$/, safeCallbackHandler(async (ctx) => {
     await ctx.answerOnCallback({ notification: 'Формируем файл...' });
     const fileAttachment = await ctx.api.uploadFile({ source: buffer });
     
-    await ctx.reply('📥 **Список участников**', {
+    await ctx.reply('📥 Список участников', {
       format: 'markdown',
       attachments: [fileAttachment.toJson()]
     });
@@ -290,7 +297,7 @@ bot.action('menu:my_tickets', safeCallbackHandler(async (ctx) => {
   buttons.push([Keyboard.button.callback('⬅️ Назад', 'menu:main')]);
 
   const keyboard = Keyboard.inlineKeyboard(buttons);
-  return ctx.reply('🎫 **Ваши билеты:**\n\nВыберите билет для просмотра:', {
+  return ctx.reply('🎫 Ваши билеты:\n\nВыберите билет для просмотра:', {
     format: 'markdown',
     attachments: [keyboard]
   });
@@ -311,14 +318,14 @@ bot.action(/^ticket:view:(.+)$/, safeCallbackHandler(async (ctx) => {
   const statusText = ticket.status === 'registered' ? 'Активен' : 'Отмечен';
   
   const message = `
-🎫 **Билет на мероприятие**
+🎫 Билет на мероприятие
 
-**Название:** ${ticket.title}
-**Дата:** ${ticket.event_date}
-**Время:** ${ticket.event_time}
-**Место:** ${ticket.location}
-**Статус:** ${statusEmoji} ${statusText}
-**UUID:** \`${ticket.uuid}\`
+Название: ${ticket.title}
+Дата: ${ticket.event_date}
+Время: ${ticket.event_time}
+Место: ${ticket.location}
+Статус: ${statusEmoji} ${statusText}
+UUID: \`${ticket.uuid}\`
   `.trim();
 
   const keyboard = Keyboard.inlineKeyboard([
@@ -369,7 +376,7 @@ bot.action(/^ticket:delete:(.+)$/, safeCallbackHandler(async (ctx) => {
   ]);
   
   await ctx.answerOnCallback({ notification: 'Подтвердите удаление билета' });
-  return ctx.reply(`Вы уверены, что хотите удалить билет на мероприятие **${ticket.event_title}**?`, {
+  return ctx.reply(`Вы уверены, что хотите удалить билет на мероприятие ${ticket.event_title}?`, {
     format: 'markdown',
     attachments: [confirmKeyboard]
   });
@@ -423,11 +430,92 @@ async function handleCreateEventCommand(ctx) {
   ]);
 
   return ctx.reply(
-    '📝 **Создание нового мероприятия**\n\nВведите **название** мероприятия:',
+    '📝 Создание нового мероприятия\n\nВведите название мероприятия:',
     { format: 'markdown', attachments: [keyboard] }
   );
 }
+// Пагинация страниц выбора института
+bot.action(/^institute_page:(.+):(\d+)$/, safeCallbackHandler(async (ctx) => {
+  const stateStep = ctx.match[1];
+  const page = parseInt(ctx.match[2], 10);
+  const userId = ctx.user.user_id;
+  const state = stateManager.getUserState(userId);
+  if (!state || state.step !== stateStep) {
+    return ctx.answerOnCallback({ notification: 'Сессия устарела' });
+  }
+  await ctx.answerOnCallback({ notification: `Страница ${page}` });
+  if (stateStep === 'event_institute') {
+    return showInstitutePageForEvent(ctx, userId, page);
+  } else {
+    return basicHandlers.showInstitutePage(ctx, userId, page, stateStep);
+  }
+}));
 
+// Выбор конкретного института (универсальный)
+bot.action(/^institute_select:(.+):(.+)$/, safeCallbackHandler(async (ctx) => {
+  const stateStep = ctx.match[1];
+  const instituteKey = ctx.match[2];
+  const userId = ctx.user.user_id;
+  const state = stateManager.getUserState(userId);
+  if (!state || state.step !== stateStep) {
+    return ctx.answerOnCallback({ notification: 'Сессия устарела' });
+  }
+  state.institute = instituteKey === 'none' ? null : instituteKey;
+  await ctx.answerOnCallback({ notification: 'Институт выбран' });
+
+  switch (stateStep) {
+    case 'waiting_institute_select':
+      if (state.role === 'admin') {
+        db.createOrUpdateUser(userId, {
+          full_name: state.full_name,
+          institute: state.institute,
+          group_name: null,
+          role: 'admin'
+        });
+        stateManager.deleteUserState(userId);
+        const adminUser = db.getUser(userId);
+        return ctx.reply('✅ Регистрация завершена!', {
+          format: 'markdown',
+          attachments: [getMainMenuKeyboard(adminUser.role)]
+        });
+      } else {
+        state.step = 'waiting_group';
+        stateManager.setUserState(userId, state);
+        return ctx.reply('👥 Укажите вашу **группу**:', { format: 'markdown' });
+      }
+
+    case 'profile_edit_institute_select':
+      const updatedUser = {...state.tempProfile, institute: state.institute};
+      state.tempProfile = updatedUser;
+      if (state.tempProfile.role === 'admin') {
+        db.updateUserProfile(userId, {
+          full_name: state.tempProfile.full_name,
+          institute: state.tempProfile.institute,
+          group_name: null,
+          role: state.tempProfile.role
+        });
+        stateManager.deleteUserState(userId);
+        await ctx.reply('✅ Профиль обновлён!');
+        return basicHandlers.handleProfileCommand(ctx);
+      } else {
+        state.step = 'profile_edit_group';
+        stateManager.setUserState(userId, state);
+        return ctx.reply('Введите **группу**:', { format: 'markdown' });
+      }
+
+    case 'event_institute':
+      state.tempEvent.institute_filter = state.institute;
+      state.step = 'event_date';
+      stateManager.setUserState(userId, state);
+      const cancelKeyboard = Keyboard.inlineKeyboard([
+        [Keyboard.button.callback('❌ Отменить', 'event:cancel')]
+      ]);
+      return ctx.reply('📅 Введите **дату** в формате ГГГГ-ММ-ДД:', { attachments: [cancelKeyboard] });
+
+    default:
+      return ctx.answerOnCallback({ notification: 'Ошибка контекста' });
+  }
+}));
 // Отмена создания
 bot.action('event:cancel', safeCallbackHandler(async (ctx) => {
   const userId = ctx.user?.user_id;
@@ -484,19 +572,23 @@ async function handleEventCreationInput(ctx, state) {
       state.tempEvent.title = text;
       state.step = 'event_description';
       stateManager.setUserState(userId, state);
-      return ctx.reply('📄 Введите **описание** мероприятия:', { format: 'markdown', attachments: [cancelKeyboard] });
+      return ctx.reply('📄 Введите описание мероприятия:', { format: 'markdown', attachments: [cancelKeyboard] });
 
     case 'event_description':
       state.tempEvent.description = text;
       state.step = 'event_category';
-      const catKeyboard = Keyboard.inlineKeyboard([
-        [Keyboard.button.callback('Наука', 'event_cat:science')],
-        [Keyboard.button.callback('Спорт', 'event_cat:sport')],
-        [Keyboard.button.callback('Культура', 'event_cat:culture')],
-        [Keyboard.button.callback('❌ Отменить', 'event:cancel')]
+      stateManager.setUserState(userId, state);
+      const categories = db.getCategories();
+      const catButtons = categories.map(c => [
+          Keyboard.button.callback(c.name, `event_cat:${c.key}`)
       ]);
-      return ctx.reply('🏷️ Выберите **категорию**:', { attachments: [catKeyboard] });
-
+      catButtons.push([Keyboard.button.callback('❌ Отменить', 'event:cancel')]);
+      const catKeyboard = Keyboard.inlineKeyboard(catButtons);
+      return ctx.reply('🏷️ Выберите категорию:', { attachments: [catKeyboard] });
+        state.tempEvent.description = text;
+        state.step = 'event_institute';
+        stateManager.setUserState(userId, state);
+        return showInstitutePageForEvent(ctx, userId, 1);
     case 'event_date':
       if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
         return ctx.reply('❌ Неверный формат. Введите дату в формате ГГГГ-ММ-ДД (например, 2026-05-20):', { attachments: [cancelKeyboard] });
@@ -504,7 +596,7 @@ async function handleEventCreationInput(ctx, state) {
       state.tempEvent.event_date = text;
       state.step = 'event_time';
       stateManager.setUserState(userId, state);
-      return ctx.reply('⏰ Введите **время** в формате ЧЧ:ММ (например, 14:00):', { attachments: [cancelKeyboard] });
+      return ctx.reply('⏰ Введите время в формате ЧЧ:ММ (например, 14:00):', { attachments: [cancelKeyboard] });
 
     case 'event_time':
       if (!/^\d{2}:\d{2}$/.test(text)) {
@@ -513,13 +605,13 @@ async function handleEventCreationInput(ctx, state) {
       state.tempEvent.event_time = text;
       state.step = 'event_location';
       stateManager.setUserState(userId, state);
-      return ctx.reply('📍 Введите **место проведения**:', { attachments: [cancelKeyboard] });
+      return ctx.reply('📍 Введите место проведения:', { attachments: [cancelKeyboard] });
 
     case 'event_location':
       state.tempEvent.location = text;
       state.step = 'event_capacity';
       stateManager.setUserState(userId, state);
-      return ctx.reply('👥 Введите **количество мест**:', { attachments: [cancelKeyboard] });
+      return ctx.reply('👥 Введите количество мест:', { attachments: [cancelKeyboard] });
 
     case 'event_capacity':
       const capacity = parseInt(text, 10);
@@ -532,7 +624,6 @@ async function handleEventCreationInput(ctx, state) {
         const eventId = db.createEvent({
           ...state.tempEvent,
           organizer_user_id: userId,
-          institute_filter: null,
           geo_coords: null
         });
         stateManager.deleteUserState(userId);
@@ -540,7 +631,7 @@ async function handleEventCreationInput(ctx, state) {
         const successKeyboard = Keyboard.inlineKeyboard([
           [Keyboard.button.callback('🏠 Главное меню', 'menu:main')]
         ]);
-        return ctx.reply(`✅ Мероприятие **"${state.tempEvent.title}"** успешно создано! (ID: ${eventId})`, 
+        return ctx.reply(`✅ Мероприятие "${state.tempEvent.title}" успешно создано! (ID: ${eventId})`, 
           { format: 'markdown', attachments: [successKeyboard] });
       } catch (err) {
         console.error('Ошибка создания мероприятия:', err);
@@ -564,19 +655,37 @@ bot.action(/^event_cat:(.+)$/, safeCallbackHandler(async (ctx) => {
 
   const category = ctx.match[1];
   state.tempEvent.category = category;
-  state.step = 'event_date';
+  state.step = 'event_institute';
   stateManager.setUserState(userId, state);
 
   await ctx.answerOnCallback({ notification: `Категория: ${category}` });
-  
-  const cancelKeyboard = Keyboard.inlineKeyboard([
-    [Keyboard.button.callback('❌ Отменить', 'event:cancel')]
-  ]);
-  return ctx.reply('📅 Введите **дату** в формате ГГГГ-ММ-ДД (например, 2026-05-20):', 
-    { attachments: [cancelKeyboard] });
+  return showInstitutePageForEvent(ctx, userId, 1);
 }));
 
 // ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====
+async function showInstitutePageForEvent(ctx, userId, page) {
+  const institutes = db.getInstitutes();
+  const totalPages = Math.ceil(institutes.length / INSTITUTES_PER_PAGE);
+  if (page < 1) page = 1;
+  if (page > totalPages) page = totalPages;
+  const start = (page - 1) * INSTITUTES_PER_PAGE;
+  const pageItems = institutes.slice(start, start + INSTITUTES_PER_PAGE);
+
+  const buttons = pageItems.map(inst => [
+    Keyboard.button.callback(inst.name, `institute_select:event_institute:${inst.key}`)
+  ]);
+
+  const navRow = [];
+  if (page > 1) navRow.push(Keyboard.button.callback('⬅️ Назад', `institute_page:event_institute:${page - 1}`));
+  if (page < totalPages) navRow.push(Keyboard.button.callback('Вперёд ➡️', `institute_page:event_institute:${page + 1}`));
+  if (navRow.length) buttons.push(navRow);
+
+  buttons.push([Keyboard.button.callback('Все институты', `institute_select:event_institute:none`)]);
+
+  const keyboard = Keyboard.inlineKeyboard(buttons);
+  return ctx.reply('🏛️ Выберите институт, к которому относится мероприятие:', { attachments: [keyboard] });
+}
+
 function showEventsPage(ctx, page = 1, filters = {}) {
   const events = db.getEvents(filters);
   const ITEMS_PER_PAGE = 5;
@@ -602,14 +711,23 @@ function showEventsPage(ctx, page = 1, filters = {}) {
   buttons.push([Keyboard.button.callback('🏠 Главное меню', 'menu:main')]);
 
   const keyboard = Keyboard.inlineKeyboard(buttons);
-  const message = `📋 **Афиша мероприятий** (страница ${page}/${totalPages}):`;
+  const message = `📋 Афиша мероприятий (страница ${page}/${totalPages}):`;
   
   return ctx.reply(message, { format: 'markdown', attachments: [keyboard] });
 }
 
 // === Запуск Express API ===
 const app = express();
-app.use(cors());
+
+app.use((req, res, next) => {
+    console.log('🌍 Запрос:', req.method, req.url);
+    next();
+});
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json({ limit: '10mb' }));
 app.use('/api', apiRoutes);
 
