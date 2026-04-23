@@ -15,14 +15,28 @@ function validateInitData(req, res, next) {
   req.userId = parseInt(userId, 10);
   next();
 }
-
+//Отмена билета
+router.post('/tickets/cancel', validateInitData, (req, res) => {
+  const { uuid } = req.body;
+  if (!uuid) return res.status(400).json({ error: 'UUID билета обязателен' });
+  try {
+    const result = db.cancelTicket(req.userId, uuid);
+    res.json({ success: true, event_id: result.event_id });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
 // Получить список мероприятий с фильтрацией
 router.post('/events/list', validateInitData, (req, res) => {
   const { category, institute } = req.body;
   const events = db.getEvents({ category, institute });
   res.json({ events });
 });
-
+// Получить профиль текущего пользователя (роль и данные)
+router.post('/users/me', validateInitData, (req, res) => {
+  const user = db.getUser(req.userId);
+  res.json({ user });
+});
 // Получить детали конкретного мероприятия
 router.post('/events/:id', validateInitData, (req, res) => {
   const eventId = parseInt(req.params.id, 10);

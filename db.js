@@ -183,7 +183,7 @@ function getTicketByUUID(uuid) {
 function getUserTickets(userId) {
   const stmt = db.prepare(`
     SELECT t.uuid, t.status, t.created_at, t.checked_in_at,
-           e.title, e.event_date, e.event_time, e.location
+           e.id as event_id, e.title, e.event_date, e.event_time, e.location
     FROM tickets t
     JOIN events e ON t.event_id = e.id
     WHERE t.user_id = ? AND t.status != 'cancelled'
@@ -204,8 +204,132 @@ function markTicketAsCheckedIn(uuid) {
   stmt.run(uuid);
   return ticket;
 }
+// Добавить в конец файла перед module.exports
+function updateUserRole(userId, role) {
+  const stmt = db.prepare('UPDATE users SET role = ? WHERE user_id = ?');
+  return stmt.run(role, userId);
+}
 
-// ========== Экспорт ==========
+// Отмена билета (только для владельца)
+function cancelTicket(userId, uuid) {
+  const ticket = getTicketByUUID(uuid);
+  if (!ticket || ticket.user_id !== userId) {
+    throw new Error('Билет не найден или не принадлежит вам');
+  }
+  if (ticket.status === 'cancelled') {
+    throw new Error('Билет уже отменён');
+  }
+
+  const updateTicketStmt = db.prepare(`UPDATE tickets SET status = 'cancelled' WHERE uuid = ?`);
+  updateTicketStmt.run(uuid);
+
+  // Возвращаем место только если билет был активен (не отмечен)
+  if (ticket.status === 'registered') {
+    const updateEventStmt = db.prepare(`UPDATE events SET available_seats = available_seats + 1 WHERE id = ?`);
+    updateEventStmt.run(ticket.event_id);
+  }
+
+  return { event_id: ticket.event_id, changes: 1, previousStatus: ticket.status };
+}
+// Обновление профиля пользователя (ФИО, институт, группа, роль)
+function updateUserProfile(userId, data) {
+  const fields = [];
+  const values = [];
+  
+  if (data.full_name !== undefined) { fields.push('full_name = ?'); values.push(data.full_name); }
+  if (data.institute !== undefined) { fields.push('institute = ?'); values.push(data.institute); }
+  if (data.group_name !== undefined) { fields.push('group_name = ?'); values.push(data.group_name); }
+  if (data.role !== undefined) { fields.push('role = ?'); values.push(data.role); }
+  
+  if (fields.length === 0) return { changes: 0 };
+  
+  const query = `UPDATE users SET ${fields.join(', ')} WHERE user_id = ?`;
+  values.push(userId);
+  const stmt = db.prepare(query);
+  return stmt.run(...values);
+}
+// Удаление мероприятия (только для организатора или admin)
+function deleteEvent(eventId, userId) {
+  // Получаем мероприятие
+  const event = getEventById(eventId);
+  if (!event) {
+    throw new Error('Мероприятие не найдено');
+  }
+
+  // Проверяем права: организатор или admin
+  const user = getUser(userId);
+  if (!user) {
+    throw new Error('Пользователь не найден');
+  }
+  if (event.organizer_user_id !== userId && user.role !== 'admin') {
+    throw new Error('У вас нет прав на удаление этого мероприятия');
+  }
+
+  // Удаляем связанные билеты (можно оставить для истории, но по ТЗ удаляем)
+  db.prepare('DELETE FROM tickets WHERE event_id = ?').run(eventId);
+  // Удаляем связи модераторов
+  db.prepare('DELETE FROM moderators WHERE event_id = ?').run(eventId);
+  // Удаляем отзывы
+  db.prepare('DELETE FROM feedback WHERE event_id = ?').run(eventId);
+  // Удаляем само мероприятие
+  const stmt = db.prepare('DELETE FROM events WHERE id = ?');
+  const result = stmt.run(eventId);
+  return result.changes;
+}
+// Статистика мероприятия для организатора
+function getEventStats(eventId, userId) {
+  const event = getEventById(eventId);
+  if (!event) throw new Error('Мероприятие не найдено');
+  
+  // Проверяем права: организатор или admin
+  const user = getUser(userId);
+  if (!user) throw new Error('Пользователь не найден');
+  if (event.organizer_user_id !== userId && user.role !== 'admin') {
+    throw new Error('Нет доступа к статистике');
+  }
+  
+  const stats = {
+    total_seats: event.capacity,
+    available_seats: event.available_seats,
+    registered: 0,
+    checked_in: 0
+  };
+  
+  const registeredResult = db.prepare(
+    'SELECT COUNT(*) as count FROM tickets WHERE event_id = ? AND status = ?'
+  ).get(eventId, 'registered');
+  stats.registered = registeredResult.count;
+  
+  const checkedResult = db.prepare(
+    'SELECT COUNT(*) as count FROM tickets WHERE event_id = ? AND status = ?'
+  ).get(eventId, 'checked_in');
+  stats.checked_in = checkedResult.count;
+  
+  return stats;
+}
+
+// Список участников мероприятия с их статусами
+function getEventParticipants(eventId, userId) {
+  const event = getEventById(eventId);
+  if (!event) throw new Error('Мероприятие не найдено');
+  
+  const user = getUser(userId);
+  if (!user) throw new Error('Пользователь не найден');
+  if (event.organizer_user_id !== userId && user.role !== 'admin') {
+    throw new Error('Нет доступа к списку участников');
+  }
+  
+  const stmt = db.prepare(`
+    SELECT u.full_name, u.institute, u.group_name, t.status, t.uuid, t.checked_in_at
+    FROM tickets t
+    JOIN users u ON t.user_id = u.user_id
+    WHERE t.event_id = ? AND t.status != 'cancelled'
+    ORDER BY t.status, u.full_name
+  `);
+  return stmt.all(eventId);
+}
+
+
 module.exports = {
   initDb,
   getUser,
@@ -216,5 +340,11 @@ module.exports = {
   registerForEvent,
   getTicketByUUID,
   getUserTickets,
-  markTicketAsCheckedIn
+  markTicketAsCheckedIn,
+  updateUserRole,
+  cancelTicket,
+  updateUserProfile,
+  deleteEvent,
+  getEventStats,
+  getEventParticipants
 };
