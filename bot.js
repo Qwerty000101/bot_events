@@ -2,7 +2,7 @@ require('dotenv').config();
 const { Bot, Keyboard } = require('@maxhub/max-bot-api');
 const express = require('express');
 const cors = require('cors');
-const cron = require('node-cron');
+const cron = require('node-cron');       // если не используется, можно удалить
 const XLSX = require('xlsx');
 const db = require('./db');
 const stateManager = require('./stateManager');
@@ -12,55 +12,65 @@ const apiRoutes = require('./api/routes');
 
 const INSTITUTES_PER_PAGE = 8;
 
-// Инициализация БД
+// Инициализация БД (один раз)
 db.initDb();
 
-// Создаём бота
-const botToken = process.env.BOT_TOKEN;
-if (!botToken) {
-  console.error('❌ BOT_TOKEN не найден в .env');
-  process.exit(1);
-}
+// === Глобальные переменные для перезапуска ===
+let currentBotInstance = null;
+let botStartTime = Date.now();
+global.botStartTime = botStartTime;
 
-const bot = new Bot(botToken);
-global.botInstance = bot; // для использования в API
-global.botStartTime = Date.now();
-
-// === Настройка обработчиков бота ===
-
-// Middleware для фильтрации старых событий
-bot.use(async (ctx, next) => {
-  const updateTimestamp = ctx.update?.created_at || ctx.message?.timestamp || ctx.timestamp;
-  if (updateTimestamp && updateTimestamp < (global.botStartTime - 10000)) {
-    console.log(`⏩ Пропущено старое событие: ${new Date(updateTimestamp).toISOString()}`);
-    return;
-  }
-  await next();
+// === Express API (запускается один раз, не перезапускается) ===
+const app = express();
+app.use((req, res, next) => {
+    console.log('🌍 Запрос:', req.method, req.url);
+    next();
 });
-bot.api.setMyCommands([
-  {
-    name: 'start',
-    description: 'Запустить',
-  },
-  {
-    name: 'help',
-    description: 'Справка',
-  },
-  {
-    name: 'createevent',
-    description: 'Создание мероприятий',
-  },
-  {
-    name: 'profile',
-    description: 'Профиль',
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+app.use(express.json({ limit: '10mb' }));
+app.use('/api', apiRoutes);
+
+const API_PORT = process.env.API_PORT || 3000;
+app.listen(API_PORT, () => {
+  console.log(`🌐 API сервер запущен на порту ${API_PORT}`);
+});
+
+// ========== Функция создания и настройки бота ==========
+function createAndConfigureBot() {
+  const botToken = process.env.BOT_TOKEN;
+  if (!botToken) {
+    throw new Error('❌ BOT_TOKEN не найден в .env');
   }
-  
-]);
-// Команды
-bot.command('start', basicHandlers.handleStartCommand);
-bot.command('help', (ctx) => basicHandlers.handleHelp(ctx));
-bot.command('createevent', safeCallbackHandler(handleCreateEventCommand));
-bot.command('profile', safeCallbackHandler(basicHandlers.handleProfileCommand));
+
+  const bot = new Bot(botToken);
+  global.botInstance = bot;   // для API и других модулей
+
+  // Middleware для фильтрации старых событий
+  bot.use(async (ctx, next) => {
+    const updateTimestamp = ctx.update?.created_at || ctx.message?.timestamp || ctx.timestamp;
+    if (updateTimestamp && updateTimestamp < (global.botStartTime - 10000)) {
+      console.log(`⏩ Пропущено старое событие: ${new Date(updateTimestamp).toISOString()}`);
+      return;
+    }
+    await next();
+  });
+
+  bot.api.setMyCommands([
+    { name: 'start', description: 'Запустить' },
+    { name: 'help', description: 'Справка' },
+    { name: 'createevent', description: 'Создание мероприятий' },
+    { name: 'profile', description: 'Профиль' }
+  ]);
+
+  // Команды
+  bot.command('start', basicHandlers.handleStartCommand);
+  bot.command('help', (ctx) => basicHandlers.handleHelp(ctx));
+  bot.command('createevent', safeCallbackHandler(handleCreateEventCommand));
+  bot.command('profile', safeCallbackHandler(basicHandlers.handleProfileCommand));
 
 // ===== ОБРАБОТЧИКИ =====
 bot.on('bot_started', basicHandlers.handleStartCommand);
@@ -752,41 +762,46 @@ function showEventsPage(ctx, page = 1, filters = {}) {
     return ctx.reply(message, { attachments: [keyboard], format: 'markdown' });
   }
 }
+// Возвращаем настроенного бота
+  return bot;
+}
+// ========== Функция перезапуска ==========
+async function runBotWithRetry() {
+  try {
+    // Очищаем состояния пользователей (зависшие диалоги)
+    stateManager.clear();
 
-// === Запуск Express API ===
-const app = express();
+    // Обновляем время запуска
+    botStartTime = Date.now();
+    global.botStartTime = botStartTime;
+    console.log(`⏰ Время запуска бота обновлено: ${new Date(botStartTime).toISOString()}`);
 
-app.use((req, res, next) => {
-    console.log('🌍 Запрос:', req.method, req.url);
-    next();
-});
-app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
-app.use(express.json({ limit: '10mb' }));
-app.use('/api', apiRoutes);
+    // Создаём и запускаем бота
+    currentBotInstance = createAndConfigureBot();
+    await currentBotInstance.start();
+    console.log('✅ Бот штатно остановлен. Цикл перезапуска не будет активирован.');
+  } catch (err) {
+    console.error(`❌ Критическая ошибка бота: ${err.message}`);
+    currentBotInstance = null;
+    stateManager.clear();
+    console.log('🔄 Повторный запуск через 10 секунд...');
+    setTimeout(runBotWithRetry, 10000);
+  }
+}
 
-const API_PORT = process.env.API_PORT || 3000;
-app.listen(API_PORT, () => {
-  console.log(`🌐 API сервер запущен на порту ${API_PORT}`);
-});
-bot.action('test_debug', async (ctx) => {
-  console.log('✅ test_debug сработал!');
-  await ctx.answerOnCallback({ notification: 'OK' });
-});
-// === Запуск бота ===
-bot.start().then(() => {
-  console.log('🤖 Бот запущен!');
-}).catch(err => {
-  console.error('❌ Ошибка запуска бота:', err);
-  process.exit(1);
-});
-
-// Обработка завершения
-process.once('SIGINT', () => {
-  console.log('🛑 Завершение работы...');
-  bot.stop();
+// ========== Обработка сигналов завершения ==========
+const handleShutdown = (signal) => {
+  console.log(`🛑 Получен сигнал ${signal}, остановка бота...`);
+  if (currentBotInstance) {
+    currentBotInstance.stop();
+    currentBotInstance = null;
+  }
+  stateManager.clear();
   process.exit(0);
-});
+};
+
+process.once('SIGINT', () => handleShutdown('SIGINT'));
+process.once('SIGTERM', () => handleShutdown('SIGTERM'));
+
+// ========== Запуск бота с перезапуском ==========
+runBotWithRetry();
