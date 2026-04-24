@@ -31,22 +31,20 @@ function showEventsPage(ctx, events, page) {
   const pageEvents = events.slice(startIdx, startIdx + EVENTS_PER_PAGE);
 
   const buttons = pageEvents.map(ev => [
-    Keyboard.button.callback(ev.title, `event:view:${ev.id}`)
+    Keyboard.button.callback(ev.title, `event:view:${ev.id}:${page}`)   // ← передаём страницу
   ]);
 
-  // Кнопки навигации
   const navRow = [];
-  if (page > 1) navRow.push(Keyboard.button.callback('⬅️ Назад', `afisha:page:${page - 1}`));
-  if (page < totalPages) navRow.push(Keyboard.button.callback('Вперёд ➡️', `afisha:page:${page + 1}`));
+  if (page > 1) navRow.push(Keyboard.button.callback('⬅️ Назад', `events:page:${page - 1}`));
+  if (page < totalPages) navRow.push(Keyboard.button.callback('Вперёд ➡️', `events:page:${page + 1}`));
   if (navRow.length) buttons.push(navRow);
 
   buttons.push([Keyboard.button.callback('🏠 Главное меню', 'menu:main')]);
 
   const keyboard = Keyboard.inlineKeyboard(buttons);
-  const text = `📋 **Афиша мероприятий** (страница ${page}/${totalPages}):\n\n` +
+  const text = `📋 Афиша мероприятий (страница ${page}/${totalPages}):\n\n` +
     pageEvents.map((e, i) => `${i+1}. ${e.title} (${e.event_date})`).join('\n');
 
-  // Если это callback, то редактируем сообщение, иначе отправляем новое
   if (ctx.callbackQuery) {
     return ctx.answerOnCallback({
       message: { text, attachments: [keyboard], format: 'markdown' }
@@ -71,6 +69,7 @@ const handleAfishaPage = safeCallbackHandler(async (ctx) => {
 // Просмотр деталей мероприятия
 const handleEventView = safeCallbackHandler(async (ctx) => {
   const eventId = parseInt(ctx.match[1], 10);
+  const page = parseInt(ctx.match[2], 10);   // ← извлекаем страницу
   const event = db.getEventById(eventId);
   if (!event) {
     return ctx.answerOnCallback({ notification: 'Мероприятие не найдено' });
@@ -79,14 +78,13 @@ const handleEventView = safeCallbackHandler(async (ctx) => {
   const text = formatEventDetails(event);
   const buttons = [];
 
-  // Кнопка регистрации (если есть места)
   if (event.available_seats > 0) {
     buttons.push([Keyboard.button.callback('✅ Зарегистрироваться', `event:register:${event.id}`)]);
   } else {
     buttons.push([Keyboard.button.callback('🔴 Мест нет', 'event:noop', { disabled: true })]);
   }
 
-  buttons.push([Keyboard.button.callback('🔙 Назад к списку', 'afisha:page:1')]);
+  buttons.push([Keyboard.button.callback('🔙 Назад к списку', `events:page:${page}`)]);   // ← возврат на ту же страницу
   buttons.push([Keyboard.button.callback('🏠 Главное меню', 'menu:main')]);
 
   const keyboard = Keyboard.inlineKeyboard(buttons);
@@ -139,7 +137,7 @@ async function handleCreateEventCommand(ctx) {
   });
 
   return ctx.reply(
-    '📝 **Создание нового мероприятия**\n\nВведите название мероприятия:',
+    '📝 Создание нового мероприятия\n\nВведите название мероприятия:',
     { format: 'markdown' }
   );
 }

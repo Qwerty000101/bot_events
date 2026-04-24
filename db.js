@@ -61,7 +61,7 @@ if (instCount === 0) {
     ['humanitarian', 'Гуманитарный институт'],
     ['oil_gas', 'Институт нефти и газа'],
     ['it_telecom', 'Институт информационных технологий и телекоммуникаций'],
-    ['engineering', 'Инженерный институт'],
+    ['engineering', 'Институт перспективной инженерии'],
     ['math_natural', 'Институт математики и естественных наук'],
     ['living_systems', 'Институт живых систем'],
     ['economics_management', 'Институт экономики и управления'],
@@ -415,9 +415,11 @@ function getEventParticipants(eventId, userId) {
   }
   
   const stmt = db.prepare(`
-    SELECT u.full_name, u.institute, u.group_name, t.status, t.uuid, t.checked_in_at
+    SELECT u.full_name, u.group_name, i.name as institute_name,
+           t.status, t.uuid, t.checked_in_at
     FROM tickets t
     JOIN users u ON t.user_id = u.user_id
+    LEFT JOIN institutes i ON u.institute = i.key
     WHERE t.event_id = ? AND t.status != 'cancelled'
     ORDER BY t.status, u.full_name
   `);

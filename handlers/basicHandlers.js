@@ -50,23 +50,32 @@ async function handleStartCommand(ctx) {
     // Сначала спрашиваем статус
     stateManager.setUserState(userId, { step: 'waiting_role' });
     const roleKeyboard = Keyboard.inlineKeyboard([
-      [Keyboard.button.callback('👨‍🎓 Студент', 'reg_role:student')],
-      [Keyboard.button.callback('👑 Администратор', 'reg_role:admin')]
+      [Keyboard.button.callback('Студент', 'reg_role:student')],
+      [Keyboard.button.callback('Администратор', 'reg_role:admin')]
     ]);
     return ctx.reply(
-      '👋 Добро пожаловать в систему мероприятий СКФУ!\n\nДля начала выберите ваш статус:',
+      'Добро пожаловать в систему мероприятий СКФУ!\n\nДля начала выберите ваш статус:',
       { attachments: [roleKeyboard] }
     );
   }
 
   // Пользователь уже зарегистрирован – показываем меню с учётом роли
-  const welcomeText = `👋 С возвращением, ${user.full_name || 'студент'}!\n\n` +
+  const welcomeText = `С возвращением, ${user.full_name || 'студент'}!\n\n` +
     `Выберите действие в меню ниже:`;
 
-  return ctx.reply(welcomeText, {
-    format: 'markdown',
-    attachments: [getMainMenuKeyboard(user.role)]
-  });
+  const keyboard = getMainMenuKeyboard(user.role);
+
+  // Если запрос пришёл от нажатия на инлайн-кнопку (callback) – обновляем сообщение
+  if (ctx.callbackQuery || ctx.update?.type === 'message_callback') {
+    return ctx.answerOnCallback({
+      message: { text: welcomeText, attachments: [keyboard], format: 'markdown' }
+    });
+  } else {
+    return ctx.reply(welcomeText, {
+      format: 'markdown',
+      attachments: [keyboard]
+    });
+  }
 }
 
 // Callback выбора роли при первичной регистрации
@@ -88,7 +97,7 @@ async function handleRegRoleSelect(ctx) {
   state.step = 'waiting_full_name';
   stateManager.setUserState(userId, state);
 
-  return ctx.reply('Введите ваше **ФИО**:', { format: 'markdown' });
+  return ctx.reply('Введите ваше ФИО:', { format: 'markdown' });
 }
 
 // Обработка текстовых сообщений для первичного заполнения профиля
@@ -158,20 +167,23 @@ async function handleUnknownCommand(ctx) {
 async function handleHelp(ctx) {
   const isCallback = !!ctx.callbackQuery;
   const helpText = `
-📌 **Справка по боту СКФУ События**
+📌 Справка по боту СКФУ События
 
-**Основные команды:**
+Основные команды:
 /start – Главное меню
 /help – Эта справка
-
-**Возможности:**
+/createevent – Создание мероприятий
+/profile – Профиль
+Возможности:
 • Просмотр афиши мероприятий
 • Регистрация на события
 • Получение электронного билета с QR-кодом
 • Сканирование билетов (для организаторов)
+• Создание мероприятий (для организаторов)
 • Экспорт отчётов о посещаемости
 
-По кнопке «Афиша» откроется мини-приложение с полным списком событий.
+Большая часть функций бота доступна в мини-приложении. Там же находится интерфейс
+ сканера QR-кодов для администраторов.
   `.trim();
 
   // В справке не отображаем кнопку создания (меню без роли)
@@ -199,17 +211,17 @@ async function handleProfileCommand(ctx) {
   const instituteName = db.getInstituteName(user.institute);
   const roleText = user.role === 'admin' ? 'Администратор' : 'Студент';
 
-  let text = `👤 **Ваш профиль**
+  let text = `Ваш профиль
 
-**ФИО:** ${user.full_name || 'не указано'}
-**Институт:** ${instituteName || 'не указан'}`;
+ФИО: ${user.full_name || 'не указано'}
+Институт: ${instituteName || 'не указан'}`;
 
   // Показываем группу только для студента, если она задана
   if (user.role !== 'admin' && user.group_name) {
-    text += `\n**Группа:** ${user.group_name}`;
+    text += `\nГруппа: ${user.group_name}`;
   }
 
-  text += `\n**Статус:** ${roleText}`;
+  text += `\nСтатус: ${roleText}`;
 
   const keyboard = Keyboard.inlineKeyboard([
     [Keyboard.button.callback('✏️ Редактировать профиль', 'profile:edit')],
@@ -262,7 +274,7 @@ async function handleProfileEditRoleSelect(ctx) {
 
   await ctx.answerOnCallback({ notification: role === 'student' ? 'Студент' : 'Администратор' });
   return ctx.reply(
-    `Введите новое **ФИО** (текущее: ${state.tempProfile.full_name || 'не указано'}):\n\n_Введите /quit для отмены._`,
+    `Введите новое ФИО (текущее: ${state.tempProfile.full_name || 'не указано'}):\n\n_Введите /quit для отмены._`,
     { format: 'markdown' }
   );
 }

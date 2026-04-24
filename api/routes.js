@@ -145,6 +145,72 @@ router.post('/events/update', validateInitData, (req, res) => {
     res.status(400).json({ error: err.message });
   }
 });
+// Статистика мероприятия (возвращает JSON)
+router.post('/events/stats', validateInitData, (req, res) => {
+  const eventId = parseInt(req.body.eventId, 10);
+  if (isNaN(eventId)) return res.status(400).json({ error: 'Неверный ID мероприятия' });
+  try {
+    const stats = db.getEventStats(eventId, req.userId);
+    res.json({ success: true, stats });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Экспорт списка участников в XLSX (отправка файла ботом)
+router.post('/events/export_xlsx', validateInitData, async (req, res) => {
+  const eventId = parseInt(req.body.eventId, 10);
+  if (isNaN(eventId)) return res.status(400).json({ error: 'Неверный ID мероприятия' });
+  
+  try {
+    const participants = db.getEventParticipants(eventId, req.userId);
+    if (participants.length === 0) {
+      return res.status(400).json({ error: 'Нет участников для экспорта' });
+    }
+    
+    const data = participants.map(p => ({
+      'ФИО': p.full_name,
+      'Институт': p.institute_name || '-',
+      'Группа': p.group_name || '-',
+      'Статус': p.status === 'registered' ? 'Зарегистрировался' : 'Зарегистрировался и пришёл',
+      'Время отметки': p.checked_in_at || '-'
+    }));
+    
+    const XLSX = require('xlsx');
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(data);
+    XLSX.utils.book_append_sheet(wb, ws, 'Участники');
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    
+    // Отправляем файл пользователю через бота
+    if (global.botInstance) {
+      const fileAttachment = await global.botInstance.api.uploadFile({ source: buffer });
+      await global.botInstance.api.sendMessageToUser(
+        req.userId,
+        '📥 **Список участников**',
+        {
+          format: 'markdown',
+          attachments: [fileAttachment.toJson()]
+        }
+      );
+    }
+    
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Ошибка экспорта:', err);
+    res.status(400).json({ error: err.message });
+  }
+});
+router.post('/events/participants', validateInitData, (req, res) => {
+  const eventId = parseInt(req.body.eventId, 10);
+  if (isNaN(eventId)) return res.status(400).json({ error: 'Неверный ID мероприятия' });
+  try {
+    const participants = db.getEventParticipants(eventId, req.userId);
+    res.json({ success: true, participants });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
 // Получить детали конкретного мероприятия
 router.post('/events/:id', validateInitData, (req, res) => {
   const eventId = parseInt(req.params.id, 10);

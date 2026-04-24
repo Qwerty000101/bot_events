@@ -40,8 +40,21 @@ bot.use(async (ctx, next) => {
 bot.api.setMyCommands([
   {
     name: 'start',
-    description: 'Запустить бота',
+    description: 'Запустить',
   },
+  {
+    name: 'help',
+    description: 'Справка',
+  },
+  {
+    name: 'createevent',
+    description: 'Создание мероприятий',
+  },
+  {
+    name: 'profile',
+    description: 'Профиль',
+  }
+  
 ]);
 // Команды
 bot.command('start', basicHandlers.handleStartCommand);
@@ -49,11 +62,11 @@ bot.command('help', (ctx) => basicHandlers.handleHelp(ctx));
 bot.command('createevent', safeCallbackHandler(handleCreateEventCommand));
 bot.command('profile', safeCallbackHandler(basicHandlers.handleProfileCommand));
 
-// ===== ОБРАБОТЧИКИ CALLBACK =====
-
+// ===== ОБРАБОТЧИКИ =====
+bot.on('bot_started', basicHandlers.handleStartCommand);
 // Главное меню: Афиша мероприятий (список с пагинацией)
 bot.action('menu:afisha', safeCallbackHandler(async (ctx) => {
-  await ctx.answerOnCallback({ notification: 'Загружаем афишу...' });
+  // Прямой вызов – showEventsPage определит, что это callback и обновит сообщение
   return showEventsPage(ctx, 1);
 }));
 bot.action('menu:create_event', safeCallbackHandler(async (ctx) => {
@@ -63,13 +76,13 @@ bot.action('menu:create_event', safeCallbackHandler(async (ctx) => {
 // Пагинация мероприятий – добавлено уведомление
 bot.action(/^events:page:(\d+)$/, safeCallbackHandler(async (ctx) => {
   const page = parseInt(ctx.match[1], 10);
-  await ctx.answerOnCallback({ notification: `Страница ${page}` });
   return showEventsPage(ctx, page);
 }));
 
 // Просмотр деталей мероприятия
-bot.action(/^event:view:(\d+)$/, safeCallbackHandler(async (ctx) => {
+bot.action(/^event:view:(\d+):(\d+)$/, safeCallbackHandler(async (ctx) => {
   const eventId = parseInt(ctx.match[1], 10);
+  const page = parseInt(ctx.match[2], 10);
   const userId = ctx.user.user_id;
   const event = db.getEventById(eventId);
   if (!event) {
@@ -79,30 +92,33 @@ bot.action(/^event:view:(\d+)$/, safeCallbackHandler(async (ctx) => {
   const details = formatEventDetails(event);
   const buttons = [];
 
-  // Кнопка регистрации (если есть места)
   if (event.available_seats > 0) {
     buttons.push([Keyboard.button.callback('📝 Зарегистрироваться', `event:register:${eventId}`)]);
   } else {
     buttons.push([Keyboard.button.callback('🔴 Мест нет', 'event:noop', { disabled: true })]);
   }
 
-  // Кнопки для администраторов
   const user = db.getUser(userId);
   if (user && user.role === 'admin') {
-    // Удаление доступно только организатору или admin (но оба admin, так что можно упростить)
     if (event.organizer_user_id === userId || user.role === 'admin') {
       buttons.push([Keyboard.button.callback('🗑️ Удалить мероприятие', `event:delete:${eventId}`)]);
     }
-    // Статистика доступна всем администраторам
     buttons.push([Keyboard.button.callback('📊 Статистика', `event:stats:${eventId}`)]);
   }
 
-  buttons.push([Keyboard.button.callback('⬅️ Назад к списку', 'events:page:1')]);
+  buttons.push([Keyboard.button.callback('⬅️ Назад к списку', `events:page:${page}`)]);
   buttons.push([Keyboard.button.callback('🏠 Главное меню', 'menu:main')]);
 
   const keyboard = Keyboard.inlineKeyboard(buttons);
-  await ctx.answerOnCallback({ notification: 'Детали загружены' });
-  return ctx.reply(details, { format: 'markdown', attachments: [keyboard] });
+
+  // Если вызов произошёл по кнопке – обновляем текущее сообщение
+  if (ctx.callbackQuery || ctx.update?.type === 'message_callback') {
+    return ctx.answerOnCallback({
+      message: { text: details, attachments: [keyboard], format: 'markdown' }
+    });
+  } else {
+    return ctx.reply(details, { attachments: [keyboard], format: 'markdown' });
+  }
 }));
 
 // Регистрация на мероприятие через бота
@@ -186,9 +202,9 @@ bot.action(/^event:stats:(\d+)$/, safeCallbackHandler(async (ctx) => {
   try {
     const stats = db.getEventStats(eventId, userId);
     const message = `📊 Статистика мероприятия\n\n` +
-      `👥 Зарегистрировалось: ${stats.registered}\n` +
-      `✅ Пришло: ${stats.checked_in}\n` +
-      `🎟️ Всего мест: ${stats.total_seats} (свободно: ${stats.available_seats})`;
+      `Зарегистрировалось: ${stats.registered}\n` +
+      `Зарегистрировалось и пришло: ${stats.checked_in}\n` +
+      `Всего мест: ${stats.total_seats} (свободно: ${stats.available_seats})`;
     
     const keyboard = Keyboard.inlineKeyboard([
       [Keyboard.button.callback('📋 Список участников', `event:participants:${eventId}`)],
@@ -218,7 +234,7 @@ bot.action(/^event:participants:(\d+)$/, safeCallbackHandler(async (ctx) => {
     const list = participants.map(p => {
       const statusEmoji = p.status === 'registered' ? '🟢' : '✅';
       const statusText = p.status === 'registered' ? 'Зарегистрировался' : 'Зарегистрировался и пришёл';
-      return `${statusEmoji} ${p.full_name} (${p.institute || '-'}, ${p.group_name || '-'}) — ${statusText}`;
+      return `${statusEmoji} ${p.full_name} (${p.institute_name || '-'}, ${p.group_name || '-'}) — ${statusText}`;
     }).join('\n');
     
     const message = `📋 Участники мероприятия\n\n${list}`;
@@ -247,7 +263,7 @@ bot.action(/^event:export_xlsx:(\d+)$/, safeCallbackHandler(async (ctx) => {
     
     const data = participants.map(p => ({
       'ФИО': p.full_name,
-      'Институт': p.institute || '-',
+      'Институт': p.institute_name || '-',
       'Группа': p.group_name || '-',
       'Статус': p.status === 'registered' ? 'Зарегистрировался' : 'Зарегистрировался и пришёл',
       'Время отметки': p.checked_in_at || '-'
@@ -275,7 +291,7 @@ bot.action(/^event:export_xlsx:(\d+)$/, safeCallbackHandler(async (ctx) => {
 
 // Возврат в главное меню
 bot.action('menu:main', safeCallbackHandler(async (ctx) => {
-  await ctx.answerOnCallback({ notification: 'Главное меню' });
+  // Не вызываем предварительный answerOnCallback, handleStartCommand сам решит
   return basicHandlers.handleStartCommand(ctx);
 }));
 
@@ -409,6 +425,7 @@ bot.action(/^profile_edit_role:(.+)$/, safeCallbackHandler(basicHandlers.handleP
 bot.action(/^profile_role:(.+)$/, safeCallbackHandler(basicHandlers.handleProfileRoleSelect));
 bot.action('profile:cancel', safeCallbackHandler(basicHandlers.handleProfileCancel));
 bot.action(/^reg_role:(.+)$/, safeCallbackHandler(basicHandlers.handleRegRoleSelect));
+bot.action('menu:help', safeCallbackHandler(basicHandlers.handleHelp));
 
 // ===== СОЗДАНИЕ МЕРОПРИЯТИЯ (ДИАЛОГ) =====
 async function handleCreateEventCommand(ctx) {
@@ -481,7 +498,7 @@ bot.action(/^institute_select:(.+):(.+)$/, safeCallbackHandler(async (ctx) => {
       } else {
         state.step = 'waiting_group';
         stateManager.setUserState(userId, state);
-        return ctx.reply('👥 Укажите вашу **группу**:', { format: 'markdown' });
+        return ctx.reply('👥 Укажите вашу группу:', { format: 'markdown' });
       }
 
     case 'profile_edit_institute_select':
@@ -500,7 +517,7 @@ bot.action(/^institute_select:(.+):(.+)$/, safeCallbackHandler(async (ctx) => {
       } else {
         state.step = 'profile_edit_group';
         stateManager.setUserState(userId, state);
-        return ctx.reply('Введите **группу**:', { format: 'markdown' });
+        return ctx.reply('Введите группу:', { format: 'markdown' });
       }
 
     case 'event_institute':
@@ -510,7 +527,7 @@ bot.action(/^institute_select:(.+):(.+)$/, safeCallbackHandler(async (ctx) => {
       const cancelKeyboard = Keyboard.inlineKeyboard([
         [Keyboard.button.callback('❌ Отменить', 'event:cancel')]
       ]);
-      return ctx.reply('📅 Введите **дату** в формате ГГГГ-ММ-ДД:', { attachments: [cancelKeyboard] });
+      return ctx.reply('📅 Введите дату в формате ГГГГ-ММ-ДД:', { attachments: [cancelKeyboard] });
 
     default:
       return ctx.answerOnCallback({ notification: 'Ошибка контекста' });
@@ -693,27 +710,47 @@ function showEventsPage(ctx, page = 1, filters = {}) {
   const start = (page - 1) * ITEMS_PER_PAGE;
   const pageEvents = events.slice(start, start + ITEMS_PER_PAGE);
 
+  const userId = ctx.user?.user_id;
+  const user = userId ? db.getUser(userId) : null;
+  const menuKeyboard = getMainMenuKeyboard(user?.role);
+
+  // Определяем, пришёл ли запрос от callback (нажатие на инлайн-кнопку)
+  const isCallback = !!(ctx.callbackQuery || ctx.update?.type === 'message_callback');
+
+  // Пустая афиша
   if (pageEvents.length === 0) {
-    const userId = ctx.user?.user_id;
-    const user = userId ? db.getUser(userId) : null;
-    return ctx.reply('📭 Мероприятий не найдено.', { attachments: [getMainMenuKeyboard(user?.role)] });
+    const text = '📭 Мероприятий не найдено.';
+    if (isCallback) {
+      return ctx.answerOnCallback({
+        message: { text, attachments: [menuKeyboard], format: 'markdown' }
+      });
+    } else {
+      return ctx.reply(text, { attachments: [menuKeyboard], format: 'markdown' });
+    }
   }
 
+  // Собираем клавиатуру с мероприятиями и навигацией
   const buttons = pageEvents.map(ev => [
-    Keyboard.button.callback(`${ev.title} (${ev.event_date})`, `event:view:${ev.id}`)
+    Keyboard.button.callback(`${ev.title} (${ev.event_date})`, `event:view:${ev.id}:${page}`)
   ]);
-
   const navRow = [];
   if (page > 1) navRow.push(Keyboard.button.callback('⬅️ Назад', `events:page:${page - 1}`));
   if (page < totalPages) navRow.push(Keyboard.button.callback('Вперёд ➡️', `events:page:${page + 1}`));
   if (navRow.length > 0) buttons.push(navRow);
-
   buttons.push([Keyboard.button.callback('🏠 Главное меню', 'menu:main')]);
 
   const keyboard = Keyboard.inlineKeyboard(buttons);
   const message = `📋 Афиша мероприятий (страница ${page}/${totalPages}):`;
-  
-  return ctx.reply(message, { format: 'markdown', attachments: [keyboard] });
+
+  if (isCallback) {
+    // Обновляем сообщение, к которому привязана нажатая кнопка
+    return ctx.answerOnCallback({
+      message: { text: message, attachments: [keyboard], format: 'markdown' }
+    });
+  } else {
+    // Если вызов не из callback (например, команда), создаём новое сообщение
+    return ctx.reply(message, { attachments: [keyboard], format: 'markdown' });
+  }
 }
 
 // === Запуск Express API ===
@@ -746,9 +783,6 @@ bot.start().then(() => {
   console.error('❌ Ошибка запуска бота:', err);
   process.exit(1);
 });
-
-// === Планировщик напоминаний ===
-// cron.schedule('0 * * * *', () => { ... }); // будет добавлено позже
 
 // Обработка завершения
 process.once('SIGINT', () => {
