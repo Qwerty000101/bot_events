@@ -3,7 +3,7 @@ const db = require('../db');
 const { getMainMenuKeyboard, isFreshMessage } = require('../utils');
 const stateManager = require('../stateManager');
 
-const INSTITUTES_PER_PAGE = 8; // удобно для списка из 14 институтов
+const INSTITUTES_PER_PAGE = 8;
 
 // ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ИНСТИТУТОВ ==========
 
@@ -25,9 +25,9 @@ async function showInstitutePage(ctx, userId, page, stateStep) {
   if (page < totalPages) navRow.push(Keyboard.button.callback('Вперёд ➡️', `institute_page:${stateStep}:${page + 1}`));
   if (navRow.length) buttons.push(navRow);
 
-  // Кнопка "Не указывать институт" (только для мероприятий, в профиле всегда нужен институт)
+  
   if (stateStep !== 'event_institute') {
-    // Для профиля: кнопка не нужна, но можно оставить пустую строку
+
   }
 
   const keyboard = Keyboard.inlineKeyboard(buttons);

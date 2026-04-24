@@ -4,10 +4,8 @@ const db = require('../db');
 const { generateQRCodeBuffer } = require('../services/qrService');
 const { sendTicketConfirmation } = require('../services/notificationService');
 
-// Middleware для валидации initData (упрощённый вариант – в продакшене нужна проверка подписи)
 function validateInitData(req, res, next) {
-  // В реальном проекте здесь должна быть проверка хэша initData из заголовков или query
-  // Пока для демонстрации просто извлекаем userId из тела (предполагаем, что фронт передаёт проверенный userId)
+  
   const { userId } = req.body;
   if (!userId) {
     return res.status(401).json({ error: 'Unauthorized' });

@@ -5,7 +5,7 @@ const db = new Database('ncfu_events.db');
 function initDb() {
   console.log('🗃️ Инициализация базы данных...');
 
-  // Таблица пользователей (расширенная информация)
+  // Таблица пользователей
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       user_id INTEGER PRIMARY KEY,
@@ -247,16 +247,6 @@ function registerForEvent(userId, eventId) {
   return { uuid, event };
 }
 
-// function getTicketByUUID(uuid) {
-//   const stmt = db.prepare(`
-//     SELECT t.*, u.full_name, u.institute, u.group_name, e.title as event_title, e.event_date, e.event_time
-//     FROM tickets t
-//     JOIN users u ON t.user_id = u.user_id
-//     JOIN events e ON t.event_id = e.id
-//     WHERE t.uuid = ?
-//   `);
-//   return stmt.get(uuid);
-// }
 function getTicketByUUID(uuid) {
   const stmt = db.prepare(`
     SELECT t.*,
@@ -299,7 +289,7 @@ function markTicketAsCheckedIn(uuid) {
   stmt.run(uuid);
   return ticket;
 }
-// Добавить в конец файла перед module.exports
+
 function updateUserRole(userId, role) {
   const stmt = db.prepare('UPDATE users SET role = ? WHERE user_id = ?');
   return stmt.run(role, userId);
@@ -360,7 +350,7 @@ function deleteEvent(eventId, userId) {
     throw new Error('У вас нет прав на удаление этого мероприятия');
   }
 
-  // Удаляем связанные билеты (можно оставить для истории, но по ТЗ удаляем)
+  // Удаляем связанные билет
   db.prepare('DELETE FROM tickets WHERE event_id = ?').run(eventId);
   // Удаляем связи модераторов
   db.prepare('DELETE FROM moderators WHERE event_id = ?').run(eventId);
@@ -376,7 +366,7 @@ function getEventStats(eventId, userId) {
   const event = getEventById(eventId);
   if (!event) throw new Error('Мероприятие не найдено');
   
-  // Проверяем права: организатор или admin
+  // Проверяем права
   const user = getUser(userId);
   if (!user) throw new Error('Пользователь не найден');
   if (event.organizer_user_id !== userId && user.role !== 'admin') {

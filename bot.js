@@ -2,7 +2,6 @@ require('dotenv').config();
 const { Bot, Keyboard } = require('@maxhub/max-bot-api');
 const express = require('express');
 const cors = require('cors');
-const cron = require('node-cron');       // если не используется, можно удалить
 const XLSX = require('xlsx');
 const db = require('./db');
 const stateManager = require('./stateManager');
